@@ -1,0 +1,82 @@
+# Runs the WHOLE app in containers - mongo, backend, and frontend - so
+# anyone can clone the repo and start it with one command, no Go/Node/nvm
+# installs required.
+#
+#   docker compose -f docker-compose.full.yml up -d --build
+#
+# This is separate from docker-compose.yml (which only runs MongoDB, for
+# active development against `go run`/`npm run dev`) because the two modes
+# need MongoDB's replica set member registered under a different hostname:
+# containers reach it as "mongo" (Docker's internal DNS), while a backend
+# running directly on the host needs "localhost". Mixing the two isn't
+# possible without reconfiguring the replica set, so they're kept as two
+# independent stacks (separate container names, network, and volume) rather
+# than one file trying to serve both purposes.
+#
+# Prerequisite: backend/.env must exist with real values (copy from
+# backend/.env.example) - this file only overrides the handful of vars that
+# differ when running in containers (MONGO_URI, FRONTEND_URL).
+services:
+  mongo:
+    image: mongo:7
+    container_name: cna-full-mongo
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - cna-full-mongo-data:/data/db
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "db.adminCommand('ping')"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo-init:
+    image: mongo:7
+    container_name: cna-full-mongo-init
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      mongosh --host mongo --quiet --eval "
+        try {
+          rs.status();
+          print('replica set already initiated');
+        } catch (e) {
+          rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'mongo:27017'}]});
+          print('replica set initiated');
+        }
+      "
+
+  backend:
+    build: ./backend
+    container_name: cna-full-backend
+    env_file: ./backend/.env
+    environment:
+      # Overrides for the containerized network - everything else (Bitbucket
+      # creds, JWT_SECRET, ANTHROPIC_API_KEY, ...) comes from backend/.env.
+      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+      FRONTEND_URL: http://localhost:5173
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # The browser calls this directly, so it must be an address the
+        # browser (not the frontend container) can reach - the backend's
+        # published host port, not the internal "backend" service name.
+        VITE_API_BASE_URL: http://localhost:8080
+    container_name: cna-full-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  cna-full-mongo-data:

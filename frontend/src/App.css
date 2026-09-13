@@ -1,0 +1,340 @@
+/* ---------- Layout ---------- */
+
+.app {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.app-header .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-h);
+  font-size: 15px;
+}
+
+.app-header .brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.app-header .user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.app-header .avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+}
+
+.app-header .btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.page-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+/* ---------- Login screen ---------- */
+
+.login-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+  padding: 36px 32px;
+}
+
+.login-card h1 {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.login-card p {
+  color: var(--text-muted);
+  margin-bottom: 24px;
+}
+
+/* ---------- Card ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.card-body {
+  padding: 20px;
+}
+
+.card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.card-header .count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-h);
+}
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--text-muted);
+}
+
+.btn-ghost-danger {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: transparent;
+  padding: 6px 10px;
+}
+.btn-ghost-danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+/* ---------- Forms ---------- */
+
+.repo-form {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.repo-form .repo-inputs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
+  background: var(--surface-muted);
+}
+
+.repo-form .repo-inputs:focus-within {
+  border-color: var(--accent);
+}
+
+.repo-form input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 8px 2px;
+  color: var(--text-h);
+}
+.repo-form input:focus {
+  outline: none;
+}
+
+.repo-form .slash {
+  color: var(--text-muted);
+}
+
+@media (max-width: 480px) {
+  .repo-form {
+    flex-direction: column;
+  }
+}
+
+/* ---------- Lists ---------- */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list li {
+  border-top: 1px solid var(--border);
+}
+.list li:first-child {
+  border-top: none;
+}
+
+.repo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 2px;
+}
+
+.repo-row .repo-name {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+/* ---------- Commit feed ---------- */
+
+.commit-row {
+  padding: 14px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.commit-summary {
+  font-size: 14px;
+  color: var(--text-h);
+  font-weight: 500;
+}
+.commit-summary.is-muted {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.commit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.commit-meta .sep {
+  opacity: 0.6;
+}
+
+.commit-message {
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* ---------- Badges ---------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.badge-pending {
+  color: var(--pending);
+  background: var(--pending-bg);
+}
+
+.badge-failed {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+/* ---------- Empty / error states ---------- */
+
+.empty-state {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.form-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: -6px 0 12px;
+}
+
+.load-more {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
+}

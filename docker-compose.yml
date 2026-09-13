@@ -1,0 +1,40 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: commit-notif-mongo
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "db.adminCommand('ping')"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo-init:
+    image: mongo:7
+    container_name: commit-notif-mongo-init
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      mongosh --host mongo --quiet --eval "
+        try {
+          rs.status();
+          print('replica set already initiated');
+        } catch (e) {
+          rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]});
+          print('replica set initiated');
+        }
+      "
+    # NOTE: host is 'localhost:27017' (not 'mongo:27017') because the Go backend
+    # currently runs on the host machine, not in this compose network. When we
+    # dockerize the backend later, this needs to change back to 'mongo:27017'
+    # (or the containers need a shared network alias) - revisit at that step.
+
+volumes:
+  mongo-data:
