@@ -29,7 +29,22 @@ type Repo struct {
 	RepoSlug           string        `bson:"repoSlug"`
 	LastPolledAt       *time.Time    `bson:"lastPolledAt,omitempty"`
 	LastSeenCommitHash string        `bson:"lastSeenCommitHash,omitempty"`
-	CreatedAt          time.Time     `bson:"createdAt"`
+	// RateLimitedUntil, when set and in the future, means Bitbucket 429'd
+	// us for this repo - the poller skips it until this time passes,
+	// instead of hammering the same rate limit every tick.
+	RateLimitedUntil *time.Time `bson:"rateLimitedUntil,omitempty"`
+	// CatchUpResumeURL, when set, means a previous poll hit the per-poll
+	// commit cap before reaching LastSeenCommitHash, with more (older)
+	// pages still unwalked. The poller resumes paging from here next tick
+	// instead of restarting from the newest commit - walking a large
+	// backlog incrementally across ticks without ever permanently skipping
+	// the commits in between (restarting from the tip every tick would
+	// just re-discover the same newest commits forever and never progress
+	// toward the backlog). CatchUpNewest freezes what "newest" was when
+	// catch-up began, since resumed pages no longer include it.
+	CatchUpResumeURL string    `bson:"catchUpResumeUrl,omitempty"`
+	CatchUpNewest    string    `bson:"catchUpNewest,omitempty"`
+	CreatedAt        time.Time `bson:"createdAt"`
 }
 
 // RepoSubscription links a user to a repo they've subscribed to.
@@ -43,18 +58,23 @@ type RepoSubscription struct {
 // Commit is the "commits" collection document - one per commit per repo
 // (shared across every user subscribed to that repo), not per subscription.
 type Commit struct {
-	ID            bson.ObjectID `bson:"_id,omitempty"`
-	RepoID        bson.ObjectID `bson:"repoId"`
-	CommitHash    string        `bson:"commitHash"`
-	Message       string        `bson:"message"`
-	AuthorName    string        `bson:"authorName"`
-	AuthorRaw     string        `bson:"authorRaw"`
-	CommittedAt   time.Time     `bson:"committedAt"`
-	BitbucketURL  string        `bson:"bitbucketUrl"`
-	AISummary     string        `bson:"aiSummary,omitempty"`
-	SummaryStatus string        `bson:"summaryStatus"` // "pending" | "done" | "failed"
-	Attempts      int           `bson:"attempts"`       // failed Claude calls so far - see claude.maxAttempts
-	CreatedAt     time.Time     `bson:"createdAt"`
+	ID           bson.ObjectID `bson:"_id,omitempty"`
+	RepoID       bson.ObjectID `bson:"repoId"`
+	CommitHash   string        `bson:"commitHash"`
+	Message      string        `bson:"message"`
+	AuthorName   string        `bson:"authorName"`
+	AuthorRaw    string        `bson:"authorRaw"`
+	CommittedAt  time.Time     `bson:"committedAt"`
+	BitbucketURL string        `bson:"bitbucketUrl"`
+	// Diff is the commit's unified diff (capped, see config.MaxDiffBytes),
+	// fetched once when the commit is first discovered. Empty if the diff
+	// was too large or the fetch failed - the summarizer falls back to the
+	// commit message alone in that case.
+	Diff          string    `bson:"diff,omitempty"`
+	AISummary     string    `bson:"aiSummary,omitempty"`
+	SummaryStatus string    `bson:"summaryStatus"` // "pending" | "done" | "failed"
+	Attempts      int       `bson:"attempts"`      // failed summary attempts so far - see config.MaxSummaryAttempts
+	CreatedAt     time.Time `bson:"createdAt"`
 }
 
 const (

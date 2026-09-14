@@ -6,6 +6,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -81,6 +82,19 @@ func (h *Handlers) AddRepo(c *gin.Context) {
 
 	user, ok := h.currentUser(ctx, c)
 	if !ok {
+		return
+	}
+
+	count, err := h.db.Collection("repoSubscriptions").CountDocuments(ctx, bson.M{"userId": user.ID})
+	if err != nil {
+		log.Printf("counting repo subscriptions failed: %v", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	if count >= int64(h.cfg.MaxReposPerUser) {
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+			"error": fmt.Sprintf("repo limit reached (max %d) - remove one before adding another", h.cfg.MaxReposPerUser),
+		})
 		return
 	}
 

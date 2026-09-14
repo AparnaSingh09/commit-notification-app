@@ -1,0 +1,16 @@
+{
+  "summaryProvider": "groq",
+  "claudeModel": "claude-haiku-4-5",
+  "groqModel": "qwen/qwen3.8-27b",
+  "summarizeWithDiff": true,
+  "pollIntervalSeconds": 60,
+  "summaryIntervalSeconds": 15,
+  "maxCommitsPerRepoPerPoll": 200,
+  "maxCommitsPerPollTick": 500,
+  "maxDiffBytes": 20000,
+  "maxSummaryAttempts": 3,
+  "maxSummariesPerTick": 20,
+  "feedDefaultLimit": 30,
+  "feedMaxLimit": 100,
+  "maxReposPerUser": 10
+}

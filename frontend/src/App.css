@@ -114,7 +114,7 @@
 
 .card-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 16px;
@@ -337,4 +337,55 @@
   margin-top: 16px;
   display: flex;
   justify-content: center;
+}
+
+/* ---------- Repo filter dropdown ---------- */
+
+.repo-filter {
+  position: relative;
+}
+
+.repo-filter .repo-filter-caret {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.repo-filter-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  min-width: 220px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+
+.repo-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-h);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.repo-filter-option:hover {
+  background: var(--surface-muted);
+}
+
+.repo-filter-option input {
+  margin: 0;
+}
+
+.repo-filter-divider {
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
 }

@@ -16,6 +16,12 @@
 # Prerequisite: backend/.env must exist with real values (copy from
 # backend/.env.example) - this file only overrides the handful of vars that
 # differ when running in containers (MONGO_URI, FRONTEND_URL).
+#
+# Explicit project name (see docker-compose.yml's matching comment) so this
+# stays fully isolated from the dev-mode stack - otherwise both files would
+# default to the same project name and end up sharing one network.
+name: commit-notification-app-full
+
 services:
   mongo:
     image: mongo:7

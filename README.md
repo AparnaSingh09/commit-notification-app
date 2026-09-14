@@ -20,21 +20,36 @@ commits with AI-generated one-line summaries.
   via Docker) ↔ React/Vite frontend all run and talk to each other locally.
 - ✅ **Manage Repos** — once logged in, add a repo by `workspace` + `repo-slug`;
   the backend validates it exists and you have access via the Bitbucket API
-  before saving it, and you can list/remove your subscriptions.
+  before saving it, and you can list/remove your subscriptions. Capped at
+  `maxReposPerUser` (default 10) per user — mainly to protect the
+  per-tick poll budget (see below) from being monopolized by one user.
 - ✅ **Commit polling** — a background worker checks every actively-subscribed
   repo every `POLL_INTERVAL_SECONDS` (default 60s) for new commits and stores
   them. The first poll of a newly subscribed repo only records a baseline
   (no backfill of old history, per the earlier cost decision) - only commits
   from that point on get stored.
-- ✅ **Claude summaries** — a second background worker picks up commits with
-  `summaryStatus: "pending"` and asks Claude Haiku 4.5 for a one-sentence
-  summary of the commit message (message only, no diff, per the cost
-  decision). Failed calls retry up to 3 times before being marked `"failed"`.
-  **Requires `ANTHROPIC_API_KEY` in `.env`** — without it, the backend logs a
-  warning and skips this worker; commits just stay `"pending"` until it's set.
+- ✅ **AI summaries, diff-aware (pluggable provider)** — a second background
+  worker picks up commits with `summaryStatus: "pending"` and asks an LLM for
+  a one-sentence summary of **the commit message plus its diff** (fetched
+  once, capped at 20KB - see `bitbucket.FetchDiff`; falls back to
+  message-only if the diff is too large or the fetch fails). Toggle this
+  off entirely with `summarizeWithDiff: false` in `config.json` to go back
+  to message-only summaries (and skip the extra Bitbucket call per commit).
+  This means
+  summaries reflect what the code actually changed, not just what the commit
+  message claims - e.g. a message like "Add print statement" becomes "Add Go
+  main function with fmt.Println test print statement" once the diff is
+  factored in. `summaryProvider` in `config.json` picks **Claude** (Haiku 4.5) or
+  **Groq** (Qwen, open-weight, free tier) — same interface, same retry
+  behavior either way (up to 3 attempts before `"failed"`). **Requires the
+  matching API key in `.env`** — without it, the backend logs a warning and
+  skips this worker; commits just stay `"pending"` until it's set.
 - ✅ **Commit Feed** — once logged in, see commits across all your subscribed
   repos in one feed: AI summary, which repo, author, timestamp, and a link to
-  the commit on Bitbucket, newest first, with "Load more" pagination.
+  the commit on Bitbucket, newest first, with "Load more" pagination. A
+  multi-select repo filter dropdown narrows the view to one or more repos
+  (client-side, over whatever's been loaded so far) - defaults to "All"
+  every time, deliberately not persisted across reloads/re-logins.
 - ✅ **Real UI design pass** — the frontend has moved past the default Vite
   starter styling: a proper app header, card-based sections, status badges for
   pending/failed summaries, a real login screen, and light/dark theme support
@@ -75,7 +90,7 @@ graph TD
 
     Mongo[(MongoDB\nusers / repos /\nrepoSubscriptions / commits)]
     Bitbucket[[Bitbucket OAuth + REST API]]
-    Claude[[Claude API\nHaiku 4.5, message-only]]
+    Claude[[Claude or Groq API\nper SUMMARY_PROVIDER, message-only]]
 
     User -->|loads page| FE
     FE -->|fetch, credentials: include| Auth
@@ -166,23 +181,31 @@ sequenceDiagram
             W->>DB: set lastSeenCommitHash = newest (no backfill)
         else has a previous cursor
             W->>BB: page further if needed, collecting commits until\nthe previous cursor commit is found
-            W->>DB: upsert each new commit, summaryStatus="pending"
+            loop each new commit
+                alt SUMMARIZE_WITH_DIFF=true (default)
+                    W->>BB: GET diff for this commit
+                    Note over W,BB: diff over the 20KB cap, or the fetch failing,\njust means no diff - not a failed insert
+                else SUMMARIZE_WITH_DIFF=false
+                    Note over W: skip the diff fetch entirely
+                end
+                W->>DB: upsert commit (message + diff if captured), summaryStatus="pending"
+            end
             W->>DB: advance lastSeenCommitHash to the newest
         end
     end
 ```
 
-### How Claude summaries work today
+### How AI summaries work today
 
 ```mermaid
 sequenceDiagram
     participant S as Summary worker (every SUMMARY_INTERVAL_SECONDS)
     participant DB as MongoDB
-    participant C as Claude API (Haiku 4.5)
+    participant C as Claude or Groq (per SUMMARY_PROVIDER)
 
     S->>DB: find commits where summaryStatus = "pending"
     loop each pending commit
-        S->>C: commit message only (no diff)
+        S->>C: commit message + diff (if one was captured and fit the size cap)
         alt success
             C-->>S: one-sentence summary
             S->>DB: set aiSummary, summaryStatus = "done"
@@ -222,7 +245,7 @@ sequenceDiagram
 | Backend | Go, [gin](https://github.com/gin-gonic/gin), `golang.org/x/oauth2` |
 | Database | MongoDB (`go.mongodb.org/mongo-driver/v2`), run as a single-node replica set (needed for later transactions) |
 | Frontend | React (Vite), plain `fetch` — no state library |
-| AI summaries | Claude API (Haiku 4.5), commit message only |
+| AI summaries | Claude (Haiku 4.5) or Groq (`qwen/qwen3.8-27b`) — pluggable via `config.json`'s `summaryProvider`, commit message + diff (capped, with fallback) |
 | Auth | Bitbucket OAuth2 → our own signed JWT session cookie |
 
 ---
@@ -370,9 +393,25 @@ docker compose -f docker-compose.full.yml down -v
 compose files" above). A plain `down` (no `-v`) keeps the volume, so
 `up -d --build` again picks up right where you left off.
 
+**`config.json` vs `.env` inside the container:** `config.json` gets copied
+into the backend image at build time (it's just a file in the build context,
+same as the source code) - changing it requires an image rebuild
+(`up -d --build`) to take effect. `.env` is the opposite: it's injected at
+container *start* via `env_file`, so editing it only needs a restart
+(`up -d`, no `--build`) to pick up the new values.
+
 ---
 
-## Environment variables (`backend/.env`)
+## Configuration
+
+Split deliberately into two files, in `backend/`:
+
+- **`.env`** — secrets and deployment-specific values (never committed; gitignored once this becomes a real git repo).
+- **`config.json`** — non-secret application settings (model choice, retry counts, safety limits). Safe to commit — no secrets in it — and easier to discover/review than the same values buried in a gitignored env file. Ships with the repo pre-populated with sensible defaults; missing the file entirely, or missing individual fields in it, just falls back to the same hardcoded defaults (see `config.defaultFileSettings`), so it's never required to exist.
+
+Both are found by searching upward from wherever the process starts (same mechanism, so both are equally robust to being launched from `backend/`, `backend/cmd/server/`, or an IDE run configuration that defaults to the package folder).
+
+### `.env` — secrets & deployment values
 
 See `backend/.env.example` for the full template. Required for OAuth login to work:
 
@@ -382,10 +421,9 @@ See `backend/.env.example` for the full template. Required for OAuth login to wo
 | `BITBUCKET_CALLBACK_URL` | Must exactly match the consumer's registered Callback URL (scheme/host/port/path/trailing-slash all matter) |
 | `JWT_SECRET` | Random string used to derive the key that encrypts stored Bitbucket tokens at rest. **Not** used to sign session cookies (see note below). |
 | `MONGO_URI` / `MONGO_DB` | Defaults work for the local Docker setup |
-| `ANTHROPIC_API_KEY` | From the [Anthropic Console](https://console.anthropic.com/). Required for commit summaries — without it, commits stay `"pending"` forever. |
-| `CLAUDE_MODEL` | Defaults to `claude-haiku-4-5` — cheapest tier, plenty for a one-sentence summary |
-| `POLL_INTERVAL_SECONDS` | How often the commit-polling worker checks each subscribed repo (default `60`) |
-| `SUMMARY_INTERVAL_SECONDS` | How often the Claude summary worker checks for pending commits (default `15`) |
+| `ANTHROPIC_API_KEY` | From the [Anthropic Console](https://console.anthropic.com/). Required when `config.json`'s `summaryProvider` is `"claude"`. |
+| `GROQ_API_KEY` | From [console.groq.com](https://console.groq.com/) — free tier, no card required. Required when `summaryProvider` is `"groq"` (the default). |
+| `FRONTEND_URL` | Where the browser is sent after OAuth login, and the CORS-allowed origin. Default `http://localhost:5173`. |
 
 **Frontend build-time variable (not in `.env`):** `VITE_API_BASE_URL` — where the
 browser should reach the backend. Baked into the JS bundle at build time
@@ -394,7 +432,26 @@ browser should reach the backend. Baked into the JS bundle at build time
 `http://localhost:8080` for local `npm run dev`.
 
 `.env` holds real secrets and should never be committed; `.env.example` is the
-safe-to-commit template.
+safe-to-commit template (it no longer lists the settings that moved to
+`config.json` below — setting them as env vars does nothing now).
+
+### `config.json` — application settings
+
+| Field | What it is |
+|---|---|
+| `summaryProvider` | `"claude"` or `"groq"` — picks which LLM generates commit summaries. Default `"groq"` (no billing wall, open-weight, free tier — see [Possible Enhancements](#possible-enhancements)'s Cost section for why). |
+| `claudeModel` | Default `"claude-haiku-4-5"` — cheapest tier, plenty for a one-sentence summary. |
+| `groqModel` | Default `"qwen/qwen3.8-27b"`. **Careful changing this** — Groq's hosted model catalog changes over time, and reasoning-style models (e.g. `openai/gpt-oss-*`, `qwen/qwen3.6-27b`) don't work well here: they spend their token budget "thinking" before answering and can come back with an empty summary. Check `GET /openai/v1/models` against your key before picking a different one, and sanity-check the actual output, not just that the request succeeds. |
+| `summarizeWithDiff` | `true` (default) or `false` — whether the poller fetches each commit's diff for the summarizer to use. `false` = message-only, one fewer Bitbucket API call per commit. Doesn't affect the automatic per-commit fallback to message-only when a diff is too large or fails to fetch - that still happens when this is `true`. |
+| `pollIntervalSeconds` | How often the commit-polling worker checks each subscribed repo (default `60`) |
+| `summaryIntervalSeconds` | How often the summary worker checks for pending commits (default `15`) |
+| `maxCommitsPerRepoPerPoll` | Default `200`. Soft cap per repo per poll (may overshoot by up to one page, currently 50, since the cap is only checked at page boundaries - see `collectNewCommits`). A repo with more new commits than this keeps catching up incrementally over subsequent ticks rather than losing anything. |
+| `maxCommitsPerPollTick` | Default `500`. Total commits collected across *all* repos in one poll tick - once hit, remaining repos are simply checked on the next tick instead of piling more work into this one. |
+| `maxDiffBytes` | Default `20000`. Per-commit diff size cap - see `summarizeWithDiff`. |
+| `maxSummaryAttempts` | Default `3`. Retries for a *retryable* summary failure before giving up (permanent errors - bad request, auth, billing - never retry at all, regardless of this value). |
+| `maxSummariesPerTick` | Default `20`. Caps how many LLM calls the summary worker fires in one tick, so a large backlog of pending commits (e.g. after being offline for a while) drains gradually instead of bursting. |
+| `feedDefaultLimit` / `feedMaxLimit` | Defaults `30` / `100`. The Commit Feed API's default and maximum page size (`?limit=`). |
+| `maxReposPerUser` | Default `10`. Max repos a single user can subscribe to - `AddRepo` returns `409` once hit. |
 
 > **Session behavior:** session cookies are signed with a random secret
 > generated fresh every time the backend starts, not with `JWT_SECRET`. That
@@ -416,16 +473,18 @@ commit-notification-app/
 ├── docker-compose.full.yml — whole app in containers, for just running it (Option A)
 ├── backend/
 │   ├── Dockerfile
+│   ├── config.json          — non-secret application settings (safe to commit)
 │   ├── cmd/server/          — entrypoint
 │   └── internal/
 │       ├── auth/            — OAuth flow, JWT session, logout, middleware, token refresh
 │       ├── bitbucket/       — Bitbucket API client (user profile, repo lookup)
-│       ├── config/          — env loading
+│       ├── config/          — loads .env (secrets) + config.json (app settings)
 │       ├── crypto/          — AES-GCM token encryption
 │       ├── db/              — Mongo connection, indexes, models
 │       ├── repos/           — Manage Repos handlers (add/list/remove)
 │       ├── commits/         — polling worker + Commit Feed API handler
-│       └── claude/          — Claude API client + summary worker
+│       ├── claude/          — Claude API client + summary worker (+ Summarizer interface)
+│       └── groq/            — Groq API client (alternate summary provider)
 └── frontend/
     ├── Dockerfile
     ├── nginx.conf           — serves the built SPA in the container
@@ -452,16 +511,17 @@ commit-notification-app/
 **Core app is feature-complete and end-to-end runnable.** Ideas for further work, no particular order — see the [Enhancements](#possible-enhancements) section below for the fuller writeup:
 
 - [ ] Webhooks instead of polling, for lower latency and less API usage (was explicitly deferred in planning).
-- [ ] Retryable vs. permanent error distinction in the Claude summary worker (right now a billing/config error burns through retries the same as a transient network blip).
+- [ ] Retryable vs. permanent error distinction in the summary worker (right now a billing/config error burns through retries the same as a transient network blip).
 - [ ] Auto-refresh or WebSocket/SSE push for the Commit Feed (right now it only loads on page load / "Load more").
 - [ ] Automated tests (unit + integration) — everything so far has been verified manually or via throwaway scratch tests.
 - [ ] Structured logging / basic metrics (poll success rate, summary latency, API error rates).
 - [ ] Ephemeral session secret means a backend restart force-logs-out everyone — fine for one user, worth reconsidering for multi-user or production use.
-- [ ] Pluggable summary provider (Claude vs. an open-weight model like Groq/Llama) — discussed, not yet decided.
 
 Decisions already locked in: MongoDB (not Postgres), polling before webhooks,
-commit-message-only summaries (no diff), no backfill on new subscriptions,
-simple expiring JWT (no server-side revocation).
+message+diff summaries (capped at 20KB, falls back to message-only - revised
+from the original message-only-only decision once Groq's free tier removed
+the original cost concern), no backfill on new subscriptions, simple
+expiring JWT (no server-side revocation).
 
 ---
 
@@ -470,19 +530,27 @@ simple expiring JWT (no server-side revocation).
 Not needed for the app to work end-to-end — ideas if you want to keep going.
 
 **Latency / real-time feel**
-- Bitbucket webhooks instead of polling: push instead of pull, near-instant instead of up-to-`POLL_INTERVAL_SECONDS` delay, fewer wasted API calls. Deferred at the start specifically because it needs a public callback URL (a tunnel like ngrok for local dev) — worth it now that the app runs somewhere more permanent.
+- Bitbucket webhooks instead of polling: push instead of pull, near-instant instead of up-to-`pollIntervalSeconds` delay, fewer wasted API calls. Deferred at the start specifically because it needs a public callback URL (a tunnel like ngrok for local dev) — worth it now that the app runs somewhere more permanent.
 - The Commit Feed only refreshes on page load / "Load more" — a poll-on-interval or a WebSocket/SSE push from the backend would make new commits appear without a manual refresh.
+- No "new since your last visit" marker — the feed is a flat chronological list with no read/unread concept, so after a long absence you just see more pages to scroll through rather than a highlighted "here's what's new since you were last here."
+
+**Data retention**
+- Commits are **never pruned** — the `commits` collection grows forever. The Commit Feed API is paginated (`feedDefaultLimit`/`feedMaxLimit` in `config.json`) so the UI itself doesn't degrade, but the database will keep growing indefinitely with no cleanup. If this matters to you, options include a Mongo TTL index (auto-expire commits past some age) or a periodic cleanup job - not implemented, since "how long should history be kept" is a product decision, not a technical default worth guessing at.
 
 **Reliability**
-- The Claude summary worker retries any failure the same way (up to 3 times) — a billing or bad-request error will never succeed no matter how many times it's retried, so it wastes 2 attempts and 30 seconds of latency before giving up. Worth distinguishing "retryable" (rate limit, network) from "permanent" (4xx, billing) and failing fast on the latter.
-- No automated tests — everything's been verified manually or with throwaway scratch tests deleted right after. A real test suite (unit tests for the poller/summarizer logic, an integration test against a real or mocked Bitbucket/Claude) would catch regressions before they reach you.
-- `findSubscriberUser` in the poller always picks the same one subscriber's token for a shared repo — if that person's Bitbucket access is revoked, the repo stops polling for everyone, even if another subscriber's token would still work.
+- ✅ Done: **retryable vs. permanent error handling** — `internal/llmerr.APIError.Retryable()` classifies provider errors by status code (429/5xx retryable, everything else - bad request, auth, billing - permanent). A permanent error now fails immediately instead of wasting the full retry budget; verified against the three real errors this project actually hit (unscoped key, insufficient credits, bad model ID - all correctly fail fast now).
+- ✅ Done: **multi-subscriber token fallback** — the poller tries every subscriber of a shared repo (oldest subscription first, and confirms each token actually works via a real API call, not just that it refreshes) until one succeeds, instead of being pinned to a single arbitrary subscriber. One person losing access no longer stops polling for everyone else subscribed to the same repo.
+- ✅ Done: **no more silent commit loss on a large backlog** — this was a real correctness bug, not just a missing safety cap: capping a poll used to still jump the cursor straight to the newest commit, permanently skipping everything between the cap boundary and the true previous cursor (since Bitbucket only pages newest→oldest, restarting from the tip next tick would've just rediscovered the same newest commits forever, never reaching the gap). Fixed with resumable pagination (`Repo.CatchUpResumeURL`/`CatchUpNewest`) - a large backlog is now walked incrementally, possibly across many ticks, with nothing lost or duplicated. Verified with a fake multi-page server forcing a stop-and-resume mid-backlog.
+- ✅ Done: **per-tick caps**, both configurable (see [Configuration](#configuration)) - `maxSummariesPerTick` bounds how many LLM calls the summary worker fires per tick, and `maxCommitsPerPollTick` bounds total commits collected across all repos per poll tick. Both exist specifically for the "returning after a long time" scenario: a big backlog now drains gradually across ticks instead of firing an unbounded burst of API calls in one go.
+- ✅ Done: **Bitbucket rate-limit handling** — a 429 is now detected explicitly (honoring `Retry-After` when present), and the offending repo is skipped in the poll loop until the backoff window passes (`Repo.RateLimitedUntil`), instead of being treated as a generic error and retried on the very next tick regardless.
+- No automated test suite persists in the repo — verification has been done with throwaway tests written, run, and deleted in the same pass (including for everything above). A real, kept test suite would catch regressions before they reach you, rather than only when something's actively being changed.
 
 **Auth / sessions**
 - Session cookies are signed with a secret regenerated every backend restart (see the note in Environment variables) — this predates the logout button and made sense when restarting was the only way to log out. Now that a real logout endpoint exists, it's worth deciding whether restart-forces-relogout is still wanted: it means everyone gets logged out simultaneously on every deploy/restart, which matters once this isn't just you testing locally.
 
 **Cost / provider flexibility**
-- Swapping Claude for a hosted open-weight model (e.g. Groq running Llama) — discussed, not yet implemented. Would remove the dependency on Anthropic billing entirely, at some summary-quality cost. `internal/claude` is already isolated behind one method, so this is a contained change.
+- ✅ Done: summaries can now run on Claude or Groq (open-weight Llama), switchable via `summaryProvider` in `config.json` — see `internal/groq/client.go` and the `claude.Summarizer` interface in `internal/claude/worker.go`.
+- Still open: a third option (e.g. local Ollama) if you ever want to run entirely without any hosted API — deliberately not pursued for the Dockerized "anyone can run it" goal (see the earlier discussion on why local model hosting doesn't fit that).
 
 **Ops / observability**
 - Structured logging and basic metrics (poll success/failure rate, summary latency, API error counts) would make it much easier to tell what's actually happening in the background workers without tailing raw logs.

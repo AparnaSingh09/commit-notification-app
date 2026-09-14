@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react'
-import { listCommits } from '../api/client'
+import { useEffect, useRef, useState } from 'react'
+import { listCommits, listRepos } from '../api/client'
 
 function formatTimestamp(iso) {
   return new Date(iso).toLocaleString()
+}
+
+function repoKey(workspace, repoSlug) {
+  return `${workspace}/${repoSlug}`
 }
 
 function CommitRow({ commit }) {
@@ -35,8 +39,79 @@ function CommitRow({ commit }) {
   )
 }
 
+// selectedKeys is null for "All" (the default, never persisted - resets to
+// All on every page load/re-login) or an array of "workspace/repoSlug" keys.
+function RepoFilter({ repos, selectedKeys, onChange }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  if (repos.length === 0) return null
+
+  const isAll = selectedKeys === null
+
+  function toggleRepo(key) {
+    if (isAll) {
+      onChange([key])
+      return
+    }
+    const next = selectedKeys.includes(key)
+      ? selectedKeys.filter((k) => k !== key)
+      : [...selectedKeys, key]
+    onChange(next.length === 0 ? null : next)
+  }
+
+  let label = 'All repos'
+  if (!isAll) {
+    label = selectedKeys.length === 1 ? selectedKeys[0] : `${selectedKeys.length} repos selected`
+  }
+
+  return (
+    <div className="repo-filter" ref={ref}>
+      <button type="button" className="btn btn-secondary" onClick={() => setOpen((o) => !o)}>
+        {label} <span className="repo-filter-caret">▾</span>
+      </button>
+      {open && (
+        <div className="repo-filter-menu">
+          <label className="repo-filter-option">
+            <input type="checkbox" checked={isAll} onChange={() => onChange(null)} />
+            All repos
+          </label>
+          <div className="repo-filter-divider" />
+          {repos.map((r) => {
+            const key = repoKey(r.workspace, r.repoSlug)
+            return (
+              <label key={r.id} className="repo-filter-option">
+                <input
+                  type="checkbox"
+                  checked={!isAll && selectedKeys.includes(key)}
+                  onChange={() => toggleRepo(key)}
+                />
+                {key}
+              </label>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CommitFeed() {
   const [commits, setCommits] = useState([])
+  const [repos, setRepos] = useState([])
+  // null = "All" - the default every time this component mounts (login,
+  // reload, etc.); deliberately not persisted anywhere.
+  const [selectedRepoKeys, setSelectedRepoKeys] = useState(null)
   const [nextCursor, setNextCursor] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
@@ -57,6 +132,11 @@ function CommitFeed() {
 
   useEffect(() => {
     load()
+    listRepos()
+      .then(setRepos)
+      .catch(() => {
+        /* filter dropdown just won't show if this fails - not fatal to the feed itself */
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -65,11 +145,17 @@ function CommitFeed() {
     await load(nextCursor)
   }
 
+  const visibleCommits =
+    selectedRepoKeys === null
+      ? commits
+      : commits.filter((c) => selectedRepoKeys.includes(repoKey(c.workspace, c.repoSlug)))
+
   return (
     <section className="card">
       <div className="card-body">
         <div className="card-header">
           <h2>Commit Feed</h2>
+          <RepoFilter repos={repos} selectedKeys={selectedRepoKeys} onChange={setSelectedRepoKeys} />
         </div>
 
         {error && <p className="form-error">{error}</p>}
@@ -78,8 +164,12 @@ function CommitFeed() {
           <p className="empty-state">No commits yet. New commits on your subscribed repos will show up here.</p>
         )}
 
+        {loaded && commits.length > 0 && visibleCommits.length === 0 && (
+          <p className="empty-state">No commits from the selected repo(s) in what's loaded so far - try Load more.</p>
+        )}
+
         <ul className="list">
-          {commits.map((c) => (
+          {visibleCommits.map((c) => (
             <CommitRow key={c.id} commit={c} />
           ))}
         </ul>

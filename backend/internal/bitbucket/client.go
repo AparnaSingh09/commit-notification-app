@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -16,7 +18,41 @@ import (
 // existence of private repos), so neither do we.
 var ErrRepoNotFound = errors.New("repo not found or not accessible")
 
+// ErrDiffTooLarge means the commit's diff exceeded the caller's size cap.
+// Not a real error - callers should treat this as "no diff available" and
+// fall back to summarizing the commit message alone.
+var ErrDiffTooLarge = errors.New("diff exceeds size cap")
+
 const apiBase = "https://api.bitbucket.org/2.0"
+
+// RateLimitError means Bitbucket returned 429. Callers (the poller) should
+// back off this repo until RetryAfter has elapsed rather than hammering it
+// again next tick.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("bitbucket rate limit hit, retry after %s", e.RetryAfter)
+}
+
+// defaultRetryAfter is used when Bitbucket returns 429 without a usable
+// Retry-After header.
+const defaultRetryAfter = 60 * time.Second
+
+// checkRateLimit returns a *RateLimitError if resp is a 429, else nil.
+func checkRateLimit(resp *http.Response) error {
+	if resp.StatusCode != http.StatusTooManyRequests {
+		return nil
+	}
+	retryAfter := defaultRetryAfter
+	if raw := resp.Header.Get("Retry-After"); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+			retryAfter = time.Duration(secs) * time.Second
+		}
+	}
+	return &RateLimitError{RetryAfter: retryAfter}
+}
 
 // User is the subset of Bitbucket's /2.0/user response we care about.
 type User struct {
@@ -40,6 +76,9 @@ func FetchCurrentUser(httpClient *http.Client) (*User, error) {
 	}
 	defer resp.Body.Close()
 
+	if err := checkRateLimit(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bitbucket /user returned status %d", resp.StatusCode)
 	}
@@ -69,6 +108,9 @@ func FetchRepo(httpClient *http.Client, workspace, repoSlug string) (*Repo, erro
 	}
 	defer resp.Body.Close()
 
+	if err := checkRateLimit(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrRepoNotFound
 	}
@@ -117,7 +159,8 @@ func CommitsURL(workspace, repoSlug string) string {
 }
 
 // FetchCommitsPage fetches one page of commits from pageURL (either the
-// result of CommitsURL, or a previous page's Next).
+// result of CommitsURL, or a previous page's Next). Returns *RateLimitError
+// on a 429.
 func FetchCommitsPage(httpClient *http.Client, pageURL string) (*CommitsPage, error) {
 	resp, err := httpClient.Get(pageURL)
 	if err != nil {
@@ -125,6 +168,9 @@ func FetchCommitsPage(httpClient *http.Client, pageURL string) (*CommitsPage, er
 	}
 	defer resp.Body.Close()
 
+	if err := checkRateLimit(resp); err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bitbucket commits returned status %d", resp.StatusCode)
 	}
@@ -134,4 +180,38 @@ func FetchCommitsPage(httpClient *http.Client, pageURL string) (*CommitsPage, er
 		return nil, fmt.Errorf("decoding bitbucket commits response: %w", err)
 	}
 	return &page, nil
+}
+
+// FetchDiff returns the unified diff for a single commit (against its first
+// parent), for feeding to the summarizer alongside the commit message.
+// Returns ErrDiffTooLarge if the diff exceeds maxBytes - callers should
+// treat that as "no diff", not a hard failure. Returns *RateLimitError on a
+// 429.
+func FetchDiff(httpClient *http.Client, workspace, repoSlug, commitHash string, maxBytes int) (string, error) {
+	path := fmt.Sprintf("%s/repositories/%s/%s/diff/%s",
+		apiBase, url.PathEscape(workspace), url.PathEscape(repoSlug), url.PathEscape(commitHash))
+	resp, err := httpClient.Get(path)
+	if err != nil {
+		return "", fmt.Errorf("calling bitbucket diff: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkRateLimit(resp); err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("bitbucket diff returned status %d", resp.StatusCode)
+	}
+
+	// Read at most maxBytes+1: if we get exactly that much, the real diff
+	// is at or past the cap, so treat it as too large without ever
+	// buffering the whole thing.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
+	if err != nil {
+		return "", fmt.Errorf("reading bitbucket diff: %w", err)
+	}
+	if len(data) > maxBytes {
+		return "", ErrDiffTooLarge
+	}
+	return string(data), nil
 }

@@ -14,18 +14,15 @@ import (
 	appdb "commit-notification-app/backend/internal/db"
 )
 
-const (
-	defaultLimit = 30
-	maxLimit     = 100
-)
-
 // Handlers serves the Commit Feed API.
 type Handlers struct {
-	db *mongo.Database
+	db           *mongo.Database
+	defaultLimit int
+	maxLimit     int
 }
 
-func NewHandlers(db *mongo.Database) *Handlers {
-	return &Handlers{db: db}
+func NewHandlers(db *mongo.Database, defaultLimit, maxLimit int) *Handlers {
+	return &Handlers{db: db, defaultLimit: defaultLimit, maxLimit: maxLimit}
 }
 
 // feedItem is one row of the commit feed - a commit joined with which
@@ -59,14 +56,14 @@ func (h *Handlers) ListFeed(c *gin.Context) {
 		return
 	}
 
-	limit := defaultLimit
+	limit := h.defaultLimit
 	if raw := c.Query("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	if limit > maxLimit {
-		limit = maxLimit
+	if limit > h.maxLimit {
+		limit = h.maxLimit
 	}
 
 	subCursor, err := h.db.Collection("repoSubscriptions").Find(ctx, bson.M{"userId": oid})

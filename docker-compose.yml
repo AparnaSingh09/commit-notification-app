@@ -1,3 +1,9 @@
+# Explicit project name so this stays a fully separate Docker project from
+# docker-compose.full.yml - without this, both files default to the same
+# project name (the directory name) and end up sharing one network/orphan
+# list, which defeats the point of keeping them independent.
+name: commit-notification-app-dev
+
 services:
   mongo:
     image: mongo:7
@@ -38,3 +44,7 @@ services:
 
 volumes:
   mongo-data:
+    # Pinned to the exact name Compose already created before this file had
+    # an explicit project name, so existing data keeps being reused instead
+    # of the new project name silently starting a fresh empty volume.
+    name: commit-notification-app_mongo-data
