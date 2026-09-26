@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { listCommits, listRepos } from '../api/client'
 
+// How often the feed quietly re-fetches the newest page in the background,
+// so new commits (and pending summaries finishing up) appear without a
+// manual reload. 30s balances feeling "live" against not hammering the API -
+// easy to tune if you want it snappier or more relaxed.
+const LIVE_REFRESH_INTERVAL_MS = 30_000
+
 function formatTimestamp(iso) {
   return new Date(iso).toLocaleString()
 }
@@ -130,6 +136,27 @@ function CommitFeed() {
     }
   }
 
+  // Background refresh: re-fetches just the newest page and merges it in -
+  // deliberately does NOT touch nextCursor, since this is about keeping the
+  // top of the feed current, not about "Load more" pagination. Merging
+  // (rather than just prepending) matters because it also picks up summary
+  // status changing from "pending" to "done" on commits already on screen,
+  // not just brand-new commits - a commit stuck on "summarizing..." updates
+  // in place instead of needing a manual reload once its summary finishes.
+  async function refreshLatest() {
+    let res
+    try {
+      res = await listCommits()
+    } catch {
+      return // a silent background refresh failing shouldn't surface an error
+    }
+    setCommits((prev) => {
+      const freshIds = new Set(res.commits.map((c) => c.id))
+      const olderTail = prev.filter((c) => !freshIds.has(c.id))
+      return [...res.commits, ...olderTail]
+    })
+  }
+
   useEffect(() => {
     load()
     listRepos()
@@ -137,6 +164,9 @@ function CommitFeed() {
       .catch(() => {
         /* filter dropdown just won't show if this fails - not fatal to the feed itself */
       })
+
+    const intervalId = setInterval(refreshLatest, LIVE_REFRESH_INTERVAL_MS)
+    return () => clearInterval(intervalId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -49,7 +49,10 @@ commits with AI-generated one-line summaries.
   the commit on Bitbucket, newest first, with "Load more" pagination. A
   multi-select repo filter dropdown narrows the view to one or more repos
   (client-side, over whatever's been loaded so far) - defaults to "All"
-  every time, deliberately not persisted across reloads/re-logins.
+  every time, deliberately not persisted across reloads/re-logins. The feed
+  also **auto-refreshes every 30s** in the background - new commits appear
+  without a manual reload, and a commit stuck on "summarizing..." flips over
+  to its real summary on its own once the backend finishes it.
 - ✅ **Real UI design pass** — the frontend has moved past the default Vite
   starter styling: a proper app header, card-based sections, status badges for
   pending/failed summaries, a real login screen, and light/dark theme support
@@ -234,6 +237,12 @@ sequenceDiagram
     DB-->>BE: page of commits
     BE-->>FE: { commits: [...], nextCursor }
     FE-->>FE: render feed; "Load more" re-fetches with before = nextCursor
+
+    loop every 30s, in the background
+        FE->>BE: GET /api/commits?limit=30 (no before - always the newest page)
+        BE-->>FE: { commits: [...] }
+        FE-->>FE: merge: replace any on-screen commit that's in this page\n(picks up "summarizing..." -> real summary), prepend anything new,\nkeep older "Load more" history untouched. No nextCursor update -\nthis is separate from pagination.
+    end
 ```
 
 ---
@@ -530,8 +539,8 @@ expiring JWT (no server-side revocation).
 Not needed for the app to work end-to-end — ideas if you want to keep going.
 
 **Latency / real-time feel**
-- Bitbucket webhooks instead of polling: push instead of pull, near-instant instead of up-to-`pollIntervalSeconds` delay, fewer wasted API calls. Deferred at the start specifically because it needs a public callback URL (a tunnel like ngrok for local dev) — worth it now that the app runs somewhere more permanent.
-- The Commit Feed only refreshes on page load / "Load more" — a poll-on-interval or a WebSocket/SSE push from the backend would make new commits appear without a manual refresh.
+- ✅ Done: **the Commit Feed auto-refreshes every 30s** (`CommitFeed.jsx`'s `refreshLatest`) - re-fetches the newest page in the background and merges it in (replacing on-screen commits whose status/summary changed, prepending brand-new ones, leaving "Load more" history untouched). This is the frontend half of the latency story; the backend still only checks Bitbucket every `pollIntervalSeconds` (default 60s) - the feed can't show a commit before the poller has found it.
+- Still open: **Bitbucket webhooks instead of polling** on the backend - push instead of pull, near-instant instead of up-to-a-minute delay, fewer wasted API calls. Deferred at the start specifically because it needs a public callback URL (a tunnel like ngrok for local dev) — worth it now that the app runs somewhere more permanent. This is the remaining piece for genuinely instant updates end-to-end.
 - No "new since your last visit" marker — the feed is a flat chronological list with no read/unread concept, so after a long absence you just see more pages to scroll through rather than a highlighted "here's what's new since you were last here."
 
 **Data retention**
